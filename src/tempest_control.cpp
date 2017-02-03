@@ -37,6 +37,7 @@ int main(int argc, char **argv)
     //main control loop, holds the state machine
     states current = PREPARE;
     bool connected = false;
+    ros::Time last_request = ros::Time::now();
     while(ros::ok()){
         switch(current) {
             case COM_CHECK:
@@ -48,6 +49,23 @@ int main(int argc, char **argv)
                     offb_set_mode.request.custom_mode = "OFFBOARD"
                     mavros_msgs::CommandBool arm_cmd;
                     arm_cmd.request.value = true;
+                    if( current_state.mode != "OFFBOARD" &&
+                        (ros::Time::now() - last_request > ros::Duration(5.0))){
+                        if( set_mode_client.call(offb_set_mode) &&
+                            offb_set_mode.response.success){
+                            ROS_INFO("Offboard enabled");
+                        }
+                        last_request = ros::Time::now();
+                    } else {
+                        if( !current_state.armed &&
+                            (ros::Time::now() - last_request > ros::Duration(5.0))){
+                            if( arming_client.call(arm_cmd) &&
+                                arm_cmd.response.success){
+                                ROS_INFO("Vehicle armed");
+                            }
+                            last_request = ros::Time::now();
+                        }
+                    }
                 }
                 break;
             case LAUNCH:

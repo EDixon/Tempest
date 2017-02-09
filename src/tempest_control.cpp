@@ -10,12 +10,13 @@
 #include <mavros_msgs/SetMode.h>
 #include <mavros_msgs/State.h>
 #include <mavros_msgs/CommandTOL.h>
+#include <mavros_msgs/Waypoint.h>
 #include <std_msgs/String.h>
 #include <string>
 #include <boost/algorithm/string.hpp>
 
 enum states {PREPARE,LAUNCH,LOITER,WAYPOINT,WAYPOINT_DONE,RTL,WAIT_LAND,LAND,HARD_LAND,COM_CHECK,SHUTDOWN};
-enum commands {START, STOP, WAYPOINT, CANCEL, LAND, RTL}
+enum commands {START, STOP, WAYPOINT, CANCEL, LAND, RTL, NONE}
 
 
 class waypoint{
@@ -79,7 +80,7 @@ std:vector<std::string> split(const std::string &line){
 
 
 ros::Time last_ping = ros::Time::now();
-void command_cb(const std_msgs::String::ConstPtr &msg,flight_pose &land_pose, flight_pose &takeoff_pose, std::vector<waypoint> &waypoints){
+void command_cb(const std_msgs::String::ConstPtr &msg,flight_pose &land_pose, flight_pose &takeoff_pose, mavros_msgs::waypoint &waypoints){
     std::string incoming = msg->data;
     if (incoming.compare(0,7,"$START,") == 0){
         current_command = START;
@@ -88,17 +89,19 @@ void command_cb(const std_msgs::String::ConstPtr &msg,flight_pose &land_pose, fl
     } else if (incoming.compare(0,10,"$WAYPOINT,") == 0){
         std::vector<std::string> parts;
         boost::parts(parts, incoming, boost::is_any_of(","));
-        waypoint waypoint_hold;
-        waypoint_hold.lat = std::stod(parts.pos(1),0);
-        waypoint_hold.lng = std::stod(parts.pos(2),0);
-        waypoint_hold.alt = std::stod(parts.pos(2),0);
-        waypoint_hold.speed = std::stop(parts.pos(3),0);
-        waypoint_hold.heading = std::stod(parts.pos(4),0);
-        waypoint_hold.waypoint_n = int(std::stod(parts.pos(5),0));
-        //might have to check to see if waypoints[0] exists first
-        if (waypoints.back()).waypoint_n < waypoint_hold.waypoint_n){
-            waypoints.push_back(waypoint_hold);
-        }
+        mavros_msgs::waypoint waypoint_command
+        waypoint_command.request.frame = 0;//2 for mission, 0 for global. not sure on context
+        waypoint_command.request.command = 17;//16 for goto waypoint, 17 for loiter, 21 for land, 22 for takeoff
+        waypoint_command.request.is_current = true;
+        waypoint_command.request.autocontinue = true;
+        waypoint_command.request.param1 = 0.0;//hold time at waypoint, copter and rover only
+        waypoint_command.request.param2 = 5.0;//radius of waypoint acceptance, plane only
+        waypoint_command.request.param3 = 0;//not really used, sets rotation around waypoint
+        waypoint_command.request.param4 = 0;//copter only
+        waypoint_command.request.x_lat = std::stod(parts.pos(1),0);
+        waypoint_command.request.y_lng = std::stod(parts.pos(2),0);
+        waypoint_command.request.z_alt = std::stod(parts.pos(2),0);
+        waypoints[0] = waypoint_command;
         current_command = WAYPOINT;
     } else if (incoming.compare(0,8,"$CANCEL,") == 0){
         current_command = CANCEL;
@@ -125,7 +128,7 @@ int main(int argc, char **argv)
     ros::NodeHandle nh;
     flight_pose land_pose;
     flight_pose takeoff_pose;
-    std::vector<waypoint> waypoints;
+    mavros_msgs::waypoint waypoints [1];
 
     ros::Subscriber state_sub = nh.subscribe<mavros_msgs::State>
             ("mavros/state", 10, state_cb);
@@ -135,6 +138,7 @@ int main(int argc, char **argv)
             ("mavros/cmd/arming");
     ros::ServiceClient set_mode_client = nh.serviceClient<mavros_msgs::SetMode>
             ("mavros/set_mode");
+    ros::ServiceClient waypoint_client = nh.serviceClient<mavros_msgs::WaypointPush>("mavros/mission/push");
     ros::ServiceClient land_client = nh.serviceClient<mavros_msgs::CommandTOL>("mavros/cmd/land");
     ros::ServiceClient takeoff_client = nh.serviceClient<mavros_msgs::CommandTOL>("mavros/cmd/takeoff");
     ros:Subscriber command_sub = nh.subscribe<std_msgs::String>("to_front_seat",1000,boost::bind(command_cb,_1,land_pose,takeoff_pose,waypoints))
@@ -147,12 +151,12 @@ int main(int argc, char **argv)
     bool launched = false;
     bool land_permission = false;
     bool launch_request_sent = false;
-    bool have_waypoint = false;
+    bool waypoint_sent = false;
     ros::Time last_request = ros::Time::now();
     int nep_fail_count = 0;
     flight_pose takeoff_config;
     flight_pose landing_config;
-    std::float alt_hold = 10.0;
+    std::float alt_hold = 10.0;//m
     nh.setParam("min_flight_alt", alt_hold);
     while(ros::ok()){
         //check for recent ping from neptune, log if it hasn't connected'
@@ -163,9 +167,10 @@ int main(int argc, char **argv)
         //RTL if neptune has failed
         if nep_fail_count > 3 {
             current = RTL;
+            ROS_INFO("Neptune conection failed, returning to designated landing site")
         }
         //switch back to waypoint if we have one and it is asked for 
-        if waypoint.size() > 0 && current_command == WAYPOINT {
+        if current_command == WAYPOINT{
             current = WAYPOINT;
         }
 
@@ -248,90 +253,54 @@ int main(int argc, char **argv)
                             }
                             last_request = ros::Time::now();
                     }
-
                 break;
             case WAYPOINT:
-                waypoint go_here;
-                go_here = waypoints.front();
+                waypoints[0];
+                if waypoint_sent == false {
+                    if(current_state.mode == "OFFBOARD" && (ros::Time::now() - last_request > ros::Duration(5.0))){
+                        if (waypoint_client.call(waypoints)){
+                            ROS_INFO("new waypoint sent");
+                            launch_request_sent = true;
+                        }
+                        last_request = ros::Time::now();
+                    }
+                } else {
+                    if waypoint_client.response.success {
+                        ROS_INFO("arrived at waypoint, waiting");
+                        current = LOITER;
+                    } else {
+                        ROS_INFO("Vehicle in transit");
+                        //maybe at this point also consider a failure mode if launch was not successful
+                    }
+                    last_request = ros::Time::now();
+                }
+                
                 //lookup mavros waypoint type, might be a good idea to steal that 
                 //might have to use the PixHawks own waypoint management to add and remove waypoints. 
 
                 break;
-            case WAYPOINT_DONE:
-                //remove waypoint from list
-
-                break;
             case RTL:
+                    //send home position as waypoint, then loiter
 
                 break;
             case WAIT_LAND:
+                    //a loiter mode. wait here until the battery runs too low, then crash somehow
 
                 break;
             case LAND:
-
+                    //send a land command once confirmation is recieved
                 break;
             case HARD_LAND:
-
+                    //crash somehow
                 break;
             case SHUTDOWN:
-
+                    //disarm and shut down
                 break;
         }
-
-
-
-
-
-        ros::spinOnce();
-        rate.sleep();
-    }
-    //the setpoint publishing rate MUST be faster than 2Hz
-    ros::Rate rate(20.0);
-
-    geometry_msgs::PoseStamped pose;
-    pose.pose.position.x = 0;
-    pose.pose.position.y = 0;
-    pose.pose.position.z = 2;
-
-    //send a few setpoints before starting
-    for(int i = 100; ros::ok() && i > 0; --i){
-        local_pos_pub.publish(pose);
         ros::spinOnce();
         rate.sleep();
     }
 
-    mavros_msgs::SetMode offb_set_mode;
-    offb_set_mode.request.custom_mode = "OFFBOARD";
-
-    mavros_msgs::CommandBool arm_cmd;
-    arm_cmd.request.value = true;
-
-    ros::Time last_request = ros::Time::now();
-
-    while(ros::ok()){
-        if( current_state.mode != "OFFBOARD" &&
-            (ros::Time::now() - last_request > ros::Duration(5.0))){
-            if( set_mode_client.call(offb_set_mode) &&
-                offb_set_mode.response.success){
-                ROS_INFO("Offboard enabled");
-            }
-            last_request = ros::Time::now();
-        } else {
-            if( !current_state.armed &&
-                (ros::Time::now() - last_request > ros::Duration(5.0))){
-                if( arming_client.call(arm_cmd) &&
-                    arm_cmd.response.success){
-                    ROS_INFO("Vehicle armed");
-                }
-                last_request = ros::Time::now();
-            }
-        }
-
-        local_pos_pub.publish(pose);
-
-        ros::spinOnce();
-        rate.sleep();
-    }
 
     return 0;
 }

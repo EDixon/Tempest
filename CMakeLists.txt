@@ -189,3 +189,5 @@ include_directories(
 
 add_executable(tempest_control src/tempest_control.cpp)
 target_link_libraries(tempest_control ${catkin_LIBRARIES})
+add_executable(dummy_neptune src/dummy_neptune.cpp)
+target_link_libraries(dummy_neptune ${catkin_LIBRARIES})

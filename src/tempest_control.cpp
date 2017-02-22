@@ -13,6 +13,7 @@
 #include <mavros_msgs/WaypointPush.h>
 #include <mavros_msgs/Waypoint.h>
 #include <std_msgs/String.h>
+#include <tempest/TempestCmd.h>
 #include <string>
 #include <boost/algorithm/string.hpp>
 #include <vector>
@@ -57,8 +58,8 @@ void state_cb(const mavros_msgs::State::ConstPtr &msg){
     current_state = *msg;
 }
 
-void command_cb(const std_msgs::String::ConstPtr &msg,mavros_msgs::CommandTOL &land_pose, mavros_msgs::CommandTOL &takeoff_pose, std::vector<mavros_msgs::Waypoint> &waypoints){
-    std::string incoming = msg->data;
+void command_cb(tempest::TempestCmd &msg,mavros_msgs::CommandTOL &land_pose, mavros_msgs::CommandTOL &takeoff_pose, std::vector<mavros_msgs::Waypoint> &waypoints){
+    tempest::TempestCmd incoming = msg->data;
     std::vector<std::string> parts;
     boost::split(parts, incoming, boost::is_any_of(","));
     if (incoming.compare(0,6,"$TAKEOFF") == 0){
@@ -120,7 +121,7 @@ int main(int argc, char **argv){
     ros::ServiceClient waypoint_client = nh.serviceClient<mavros_msgs::WaypointPush>("mavros/mission/push");
     ros::ServiceClient land_client = nh.serviceClient<mavros_msgs::CommandTOL>("mavros/cmd/land");
     ros::ServiceClient takeoff_client = nh.serviceClient<mavros_msgs::CommandTOL>("mavros/cmd/takeoff");
-    ros::Subscriber command_sub = nh.subscribe<std_msgs::String>("tempest/to_front_seat",1000,boost::bind(command_cb,_1,land_pose,takeoff_pose,waypoints));
+    ros::Subscriber command_sub = nh.subscribe<tempest::TempestCmd>("tempest/to_front_seat",1000,boost::bind(command_cb,_1,land_pose,takeoff_pose,waypoints));
 
     
 
@@ -144,7 +145,8 @@ int main(int argc, char **argv){
     arm_cmd.request.value = true;//set arm command
     float alt_hold = 30.0;//m
     nh.setParam("min_flight_alt", alt_hold);
-
+    ros::Rate rate(20.0);
+    
     while(ros::ok() && current_state.connected){
         ros::spinOnce();
         rate.sleep();
@@ -160,7 +162,7 @@ int main(int argc, char **argv){
         ros::spinOnce();
         rate.sleep();
     }
-    ros::Rate rate(20.0);
+    
     while(ros::ok()){
         //check for recent ping from neptune, log if it hasn't connected'
 //        if ((ros::Time::now() - last_ping) > ros::Duration(5.0)) {

@@ -23,36 +23,6 @@ enum states {PREPARE,LAUNCH,LOITER,WAYPOINT,WAYPOINT_DONE,RTL,WAIT_LAND,LAND,HAR
 enum commands {TAKEOFF, STOP, GOTO_WAYPOINT, CANCEL, GO_LAND, GO_RTL, PING, NONE};
 commands current_command = NONE;
 
-//class flight_pose{
-//    public:
-//        double lat;
-//        double lng;
-//        double alt;
-//        double speed;
-//        double heading;
-//        int pose_n;
-//        flight_pose();
- //       void copy_waypoint(mavros_msgs::Waypoint &waypoint_in);
-//};
-
-//flight_pose::flight_pose(){
-//    lat = 0.0;
-//    lng = 0.0;
-//    alt = 0.0;
-//    speed = 0.0;
-//    heading = 0.0;
-//    pose_n= 0;
-//}
-
-//void flight_pose::copy_waypoint(mavros_msgs::Waypoint &waypoint_in){
-    //probably not needed really.
- //   lat = waypoint_in.x_lat;
- //   lng = waypoint_in.y_long;
-   // alt = waypoint_in.z_alt;
-  //  speed = waypoint_in.param1;
-   // heading = waypoint_in.param2;
-//}
-
 mavros_msgs::State current_state;
 void state_cb(const mavros_msgs::State::ConstPtr &msg){
     current_state = *msg;
@@ -60,18 +30,16 @@ void state_cb(const mavros_msgs::State::ConstPtr &msg){
 
 void command_cb(tempest::TempestCmd &msg,mavros_msgs::CommandTOL &land_pose, mavros_msgs::CommandTOL &takeoff_pose, std::vector<mavros_msgs::Waypoint> &waypoints){
     tempest::TempestCmd incoming = msg->data;
-    std::vector<std::string> parts;
-    boost::split(parts, incoming, boost::is_any_of(","));
-    if (incoming.compare(0,6,"$TAKEOFF") == 0){
-        takeoff_pose.request.latitude = std::strtod(parts.at(1).c_str(),NULL);
-        takeoff_pose.request.longitude = std::strtod(parts.at(2).c_str(),NULL);
-        takeoff_pose.request.altitude = std::strtod(parts.at(3).c_str(),NULL);
-        takeoff_pose.request.min_pitch = std::strtod(parts.at(4).c_str(),NULL);
-        takeoff_pose.request.yaw = std::strtod(parts.at(5).c_str(),NULL);
+    if (incoming.command == TAKEOFF){
+        takeoff_pose.request.latitude = incoming.lat;
+        takeoff_pose.request.longitude = incoming.lng;
+        takeoff_pose.request.altitude = incoming.alt;
+        takeoff_pose.request.min_pitch = incoming.min_pitch;
+        takeoff_pose.request.yaw = incoming.yaw;
         current_command = TAKEOFF;
-    } else if (incoming.compare(0,5,"$STOP") == 0){
+    } else if (incoming.command == STOP){
         current_command = STOP;
-    } else if (incoming.compare(0,9,"$WAYPOINT") == 0){
+    } else if (incoming.command == WAYPOINT){
         mavros_msgs::Waypoint waypoint_command;
         waypoint_command.frame = 0;//2 for mission, 0 for global. not sure on context
         waypoint_command.command = 17;//16 for goto waypoint, 17 for loiter, 21 for land, 22 for takeoff
@@ -82,22 +50,22 @@ void command_cb(tempest::TempestCmd &msg,mavros_msgs::CommandTOL &land_pose, mav
         waypoint_command.param3 = 0;//not really used, sets rotation around waypoint
         waypoint_command.param4 = 0;//copter only
         //can also trim using boost trim
-        waypoint_command.x_lat = std::strtod(parts.at(1).c_str(),NULL);
-        waypoint_command.y_long = std::strtod(parts.at(2).c_str(),NULL);
-        waypoint_command.z_alt = std::strtod(parts.at(3).c_str(),NULL);
+        waypoint_command.x_lat = incoming.lat;
+        waypoint_command.y_long = incoming.lng;
+        waypoint_command.z_alt = incoming.alt;
         waypoints.push_back(waypoint_command);
         current_command = GOTO_WAYPOINT;
-    } else if (incoming.compare(0,8,"$CANCEL,") == 0){
+    } else if (incoming.command == CANCEL){
         current_command = CANCEL;
-    } else if (incoming.compare(0,6,"$PING,") == 0){
+    } else if (incoming.command == PING){
         current_command = PING;
         //actually need to be able to handle asyncronous ping commands. Probably need all thest callbacks in an object
-    } else if (incoming.compare(0,10,"$LAND,") == 0){
-        land_pose.request.latitude = std::strtod(parts.at(1).c_str(),NULL);
-        land_pose.request.longitude = std::strtod(parts.at(2).c_str(),NULL);
-        land_pose.request.altitude = std::strtod(parts.at(3).c_str(),NULL);
-        land_pose.request.min_pitch = std::strtod(parts.at(4).c_str(),NULL);
-        land_pose.request.yaw = std::strtod(parts.at(5).c_str(),NULL);
+    } else if (incoming.command == LAND){
+        land_pose.request.latitude = incoming.lat;
+        land_pose.request.longitude = incoming.lng;
+        land_pose.request.altitude = incoming.alt;
+        land_pose.request.min_pitch = incoming.min_pitch;
+        land_pose.request.yaw = incoming.yaw;
         current_command = GO_LAND;
     }
 }

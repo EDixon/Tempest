@@ -1,7 +1,6 @@
 /**
- * @file offb_node.cpp
- * @brief offboard example node, written with mavros version 0.14.2, px4 flight
- * stack and tested in Gazebo SITL
+ * @file tempest_control.cpp
+ * @A skeleton node provided as an example for how to operate an autonomous UAV. Currently requires extensive bug testing and improvement.
  */
 
 #include <ros/ros.h>
@@ -13,23 +12,26 @@
 #include <mavros_msgs/WaypointPush.h>
 #include <mavros_msgs/Waypoint.h>
 #include <std_msgs/String.h>
-#include <tempest/TempestCmd.h>
+#include <Tempest/TempestCmd.h> //this may or may not be the correct way of importing the tempest command msg, might need to be in a separate package
 #include <string>
 #include <boost/algorithm/string.hpp>
 #include <vector>
 #include <stdlib.h>
 
-enum states {PREPARE,LAUNCH,LOITER,WAYPOINT,WAYPOINT_DONE,RTL,WAIT_LAND,LAND,HARD_LAND,COM_CHECK,SHUTDOWN};
-enum commands {TAKEOFF, STOP, GOTO_WAYPOINT, CANCEL, GO_LAND, GO_RTL, PING, NONE};
-commands current_command = NONE;
+enum states {PREPARE,LAUNCH,LOITER,WAYPOINT,WAYPOINT_DONE,RTL,WAIT_LAND,LAND,HARD_LAND,SHUTDOWN};//states for the state machine
+enum commands {TAKEOFF, STOP, GOTO_WAYPOINT, CANCEL, GO_LAND, GO_RTL, PING, NONE};//commands that can be recieved from SOLAR
+commands current_command = NONE;//current command, held as global. Should probably make the entire thing a class as a result
+mavros_msgs::State current_state;//current state of PixHawk, also a reason for fudamental change of code layout
 
-mavros_msgs::State current_state;
+//callback for PixHawk state publisher
 void state_cb(const mavros_msgs::State::ConstPtr &msg){
     current_state = *msg;
 }
 
+//callback for higher level command (e.g. SOLAR) subscriber. The next command for the UAV comes in here.
 void command_cb(tempest::TempestCmd &msg,mavros_msgs::CommandTOL &land_pose, mavros_msgs::CommandTOL &takeoff_pose, std::vector<mavros_msgs::Waypoint> &waypoints){
     tempest::TempestCmd incoming = msg->data;
+    //deal with each command in enum commands separately, should be prety self explanitory
     if (incoming.command == TAKEOFF){
         takeoff_pose.request.latitude = incoming.lat;
         takeoff_pose.request.longitude = incoming.lng;
@@ -39,7 +41,7 @@ void command_cb(tempest::TempestCmd &msg,mavros_msgs::CommandTOL &land_pose, mav
         current_command = TAKEOFF;
     } else if (incoming.command == STOP){
         current_command = STOP;
-    } else if (incoming.command == WAYPOINT){
+    } else if (incoming.command == GOTO_WAYPOINT){
         mavros_msgs::Waypoint waypoint_command;
         waypoint_command.frame = 0;//2 for mission, 0 for global. not sure on context
         waypoint_command.command = 17;//16 for goto waypoint, 17 for loiter, 21 for land, 22 for takeoff
@@ -56,40 +58,49 @@ void command_cb(tempest::TempestCmd &msg,mavros_msgs::CommandTOL &land_pose, mav
         waypoints.push_back(waypoint_command);
         current_command = GOTO_WAYPOINT;
     } else if (incoming.command == CANCEL){
+        //should result in all waypoints being cancelled and going into a loiter mode
         current_command = CANCEL;
     } else if (incoming.command == PING){
+        //higher level system should periodically send a ping to show that it is still working. Current code setup means that this will be missed
         current_command = PING;
-        //actually need to be able to handle asyncronous ping commands. Probably need all thest callbacks in an object
-    } else if (incoming.command == LAND){
+    } else if (incoming.command == GO_LAND){
         land_pose.request.latitude = incoming.lat;
         land_pose.request.longitude = incoming.lng;
         land_pose.request.altitude = incoming.alt;
         land_pose.request.min_pitch = incoming.min_pitch;
         land_pose.request.yaw = incoming.yaw;
         current_command = GO_LAND;
+    } else if (incoming.command == GO_RTL){
+        //command given to return to launch site, or other defined location
+        land_pose.request.latitude = incoming.lat;
+        land_pose.request.longitude = incoming.lng;
+        land_pose.request.altitude = incoming.alt;
+        land_pose.request.min_pitch = incoming.min_pitch;
+        land_pose.request.yaw = incoming.yaw;
+        current_command = GO_RTL;
     }
 }
 
 
 int main(int argc, char **argv){
-    ros::init(argc, argv, "tempest_node");
-    ros::NodeHandle nh;
-    mavros_msgs::CommandTOL land_pose;
-    mavros_msgs::CommandTOL takeoff_pose;
-    std::vector<mavros_msgs::Waypoint> waypoints;
+    ros::init(argc, argv, "tempest_node");//say hi to ROS
+    ros::NodeHandle nh;//tempest node handle
+    mavros_msgs::CommandTOL land_pose;//hold the currently designated land site
+    mavros_msgs::CommandTOL takeoff_pose;//hold designed takeoff site
+    std::vector<mavros_msgs::Waypoint> waypoints;//list of waypoints to be achieved, as a list. Should work through this list.
 
     ros::Subscriber state_sub = nh.subscribe<mavros_msgs::State>
-            ("mavros/state", 10, state_cb);
+            ("mavros/state", 10, state_cb);//state of PixHawk
     ros::Publisher local_pos_pub = nh.advertise<geometry_msgs::PoseStamped>
-            ("mavros/setpoint_position/local", 10);
+            ("mavros/setpoint_position/local", 10);//only really here to help with initialisation
     ros::ServiceClient arming_client = nh.serviceClient<mavros_msgs::CommandBool>
-            ("mavros/cmd/arming");
+            ("mavros/cmd/arming");//arming service
     ros::ServiceClient set_mode_client = nh.serviceClient<mavros_msgs::SetMode>
-            ("mavros/set_mode");
-    ros::ServiceClient waypoint_client = nh.serviceClient<mavros_msgs::WaypointPush>("mavros/mission/push");
-    ros::ServiceClient land_client = nh.serviceClient<mavros_msgs::CommandTOL>("mavros/cmd/land");
-    ros::ServiceClient takeoff_client = nh.serviceClient<mavros_msgs::CommandTOL>("mavros/cmd/takeoff");
-    ros::Subscriber command_sub = nh.subscribe<tempest::TempestCmd>("tempest/to_front_seat",1000,boost::bind(command_cb,_1,land_pose,takeoff_pose,waypoints));
+            ("mavros/set_mode");//mopde change service
+    ros::ServiceClient waypoint_client = nh.serviceClient<mavros_msgs::WaypointPush>("mavros/mission/push");//send a new mission, i.e. waypoint list
+    ros::ServiceClient land_client = nh.serviceClient<mavros_msgs::CommandTOL>("mavros/cmd/land");//send a land command
+    ros::ServiceClient takeoff_client = nh.serviceClient<mavros_msgs::CommandTOL>("mavros/cmd/takeoff");//send a takeoff command
+    ros::Subscriber command_sub = nh.subscribe<tempest::TempestCmd>("tempest/to_front_seat",1000,boost::bind(command_cb,_1,land_pose,takeoff_pose,waypoints));//incoming messages from autonomy system
 
     
 
@@ -103,28 +114,26 @@ int main(int argc, char **argv){
     ros::Time last_request = ros::Time::now();
     ros::Time last_ping = ros::Time::now();
     int nep_fail_count = 0;
-    //flight_pose takeoff_config;
-    //flight_pose landing_config;
-    mavros_msgs::CommandTOL launch_command;
-    mavros_msgs::WaypointPush send_waypoint;
+    mavros_msgs::CommandTOL launch_command;//prep command to launch
+    mavros_msgs::WaypointPush send_waypoint;//prep command to send new waypoint
     mavros_msgs::SetMode offb_set_mode;//mode set command object
     offb_set_mode.request.custom_mode = "OFFBOARD";//set mode
     mavros_msgs::CommandBool arm_cmd;//boolean command object
     arm_cmd.request.value = true;//set arm command
     float alt_hold = 30.0;//m
-    nh.setParam("min_flight_alt", alt_hold);
+    nh.setParam("min_flight_alt", alt_hold);//stores in ROS params list, for easy setting
     ros::Rate rate(20.0);
     
-    while(ros::ok() && current_state.connected){
+    while(ros::ok() && current_state.connected){//bit counter intuitive, current_state.commected returns a true when it isn't
         ros::spinOnce();
         rate.sleep();
     }
+
+    //send a few setpoints before starting, just to ensure the connection
     geometry_msgs::PoseStamped pose;
     pose.pose.position.x = 0;
     pose.pose.position.y = 0;
     pose.pose.position.z = 0;
-
-    //send a few setpoints before starting
     for(int i = 100; ros::ok() && i > 0; --i){
         local_pos_pub.publish(pose);
         ros::spinOnce();
@@ -132,7 +141,7 @@ int main(int argc, char **argv){
     }
     
     while(ros::ok()){
-        //check for recent ping from neptune, log if it hasn't connected'
+        //check for recent ping from neptune, log if it hasn't connected' currently a silly way of doing it. Maybe do a separate ping subscriber
 //        if ((ros::Time::now() - last_ping) > ros::Duration(5.0)) {
 //           ROS_INFO("neptune not connected??");
 //           nep_fail_count = nep_fail_count + 1;
@@ -149,7 +158,7 @@ int main(int argc, char **argv){
         }
 
         switch(current) {
-            //connect to the pixhawk and arm
+            //connect to the pixhawk, ready for takeoff
             case PREPARE:
                 if (armed == false){
                     //if not in offboard mode and we have asked more than 5 seconds ago, then attempt to set it
@@ -174,6 +183,7 @@ int main(int argc, char **argv){
                     }
                 }
                 break;
+            //when a launch command is recieved, arm and launch    
             case LAUNCH:
                 if (launch_request_sent == false) {
                     if(!current_state.armed){
@@ -185,18 +195,20 @@ int main(int argc, char **argv){
                             }
                             last_request = ros::Time::now();
                     }
-                    launch_command.request.min_pitch =  float(0.0);//only used at takeoff
-                    launch_command.request.yaw = float(0.0);
-                    launch_command.request.latitude = float(0.0);
-                    launch_command.request.longitude = float(0.0);
-                    nh.getParam("min_flight_alt", alt_hold);
-                    launch_command.request.altitude = float(alt_hold);
-                    if(current_state.mode == "OFFBOARD" && (ros::Time::now() - last_request > ros::Duration(5.0))){
-                        if (takeoff_client.call(launch_command)){
-                            ROS_INFO("Launch command sent");
-                            launch_request_sent = true;
+                    if(current_state.armed){
+                        launch_command.request.min_pitch =  float(0.0);//only used at takeoff
+                        launch_command.request.yaw = float(0.0);
+                        launch_command.request.latitude = float(0.0);
+                        launch_command.request.longitude = float(0.0);
+                        nh.getParam("min_flight_alt", alt_hold);
+                        launch_command.request.altitude = float(alt_hold);
+                        if(current_state.mode == "OFFBOARD" && (ros::Time::now() - last_request > ros::Duration(5.0))){
+                            if (takeoff_client.call(launch_command)){
+                              ROS_INFO("Launch command sent");
+                               launch_request_sent = true;
+                           }
+                           last_request = ros::Time::now();
                         }
-                        last_request = ros::Time::now();
                     }
                 } else {
                     if (launch_command.response.success) {
@@ -208,9 +220,8 @@ int main(int argc, char **argv){
                     }
                     last_request = ros::Time::now();
                 }
-                
-
                 break;
+            //go into loiter mode
             case LOITER:
                     if( current_state.mode != "AUTO.LOITER" &&
                             (ros::Time::now() - last_request > ros::Duration(5.0))){
@@ -224,10 +235,17 @@ int main(int argc, char **argv){
                             last_request = ros::Time::now();
                     }
                 break;
+            //go to the next waypoint
             case WAYPOINT:
-                waypoints[0];
+                if( current_state.mode != "OFFBOARD" && (ros::Time::now() - last_request > ros::Duration(5.0))){
+                        //send offbaord command and then check it
+                        if( set_mode_client.call(offb_set_mode) && offb_set_mode.response.success){
+                            ROS_INFO("Offboard re-enabled");
+                        }
+                        last_request = ros::Time::now();
+                }
                 if (waypoint_sent == false) {
-                    send_waypoint.request.waypoints = waypoints;
+                    send_waypoint.request.waypoints = waypoints; //sends the entire list of waypoints
                     if(current_state.mode == "OFFBOARD" && (ros::Time::now() - last_request > ros::Duration(5.0))){
                         if (waypoint_client.call(send_waypoint)){
                             ROS_INFO("new waypoint sent");
@@ -245,14 +263,9 @@ int main(int argc, char **argv){
                     }
                     last_request = ros::Time::now();
                 }
-                
-                //lookup mavros waypoint type, might be a good idea to steal that 
-                //might have to use the PixHawks own waypoint management to add and remove waypoints. 
-
                 break;
             case RTL:
                     //send home position as waypoint, then loiter
-
                 break;
             case WAIT_LAND:
                     //a loiter mode. wait here until the battery runs too low, then crash somehow

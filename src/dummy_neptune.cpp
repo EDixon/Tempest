@@ -1,3 +1,8 @@
+/**
+ * @file dummy_neptune.cpp
+ * @For testing, emulating what the neptune node has to do to command the tempest node
+ */
+
 #include <ros/ros.h>
 #include <std_msgs/String.h>
 #include <string>
@@ -5,7 +10,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <iostream>
-
+#include <tempest/TempestCmd>//still not convinced this is the right way of doing it.
+enum commands {TAKEOFF, STOP, GOTO_WAYPOINT, CANCEL, GO_LAND, GO_RTL, PING, NONE};
 
 class tempest_controller{
    public:
@@ -17,18 +23,23 @@ class tempest_controller{
 };
 
 tempest_controller::tempest_controller(){
-    local_pos_pub  = nh.advertise<std_msgs::String>("tempest/to_front_seat", 10);
+    local_pos_pub  = nh.advertise<tempest::TempestCmd>("tempest/to_front_seat", 10);
 }
 
 void tempest_controller::takeoff(void){
         
         ros::Rate loop_rate(10);
+        tempest::TempestCmd send_command;
+        send_command.data.command = TAKEOFF:
+
+        send_command.data.lat = 0.0;
+        send_command.data.lng = 0.0;
+        send_command.data.alt = 50.0;
+        send_command.data.min_pitch = 0.0;
+        send_command.data.yaw = 0.0;
         int count = 0;
         while (ros::ok()){
-            std_msgs::String str;
-            str.data = "$TAKEOFF,0,0,50,0,0";
-            ROS_INFO("%s",str.data.c_str());
-            local_pos_pub.publish(str);
+            local_pos_pub.publish(send_comand);
             ros::spinOnce();
             loop_rate.sleep();
             ++count;
